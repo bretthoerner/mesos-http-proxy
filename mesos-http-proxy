@@ -2,11 +2,9 @@
 
 from __future__ import print_function
 
-import atexit
 import json
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -20,9 +18,9 @@ import mesos_pb2
 
 
 class HTTPProxyScheduler(mesos.Scheduler):
-  def __init__(self, executor, service):
+  def __init__(self, executor, service_url):
     self.executor = executor
-    self.service = service
+    self.service_url = service_url
     # self.taskData = {}
     self.tasksLaunched = 0
     self.tasksFinished = 0
@@ -108,12 +106,12 @@ class HTTPProxyScheduler(mesos.Scheduler):
 
       # hit service with our offer
       try:
-        req = urllib2.Request(self.service + "offer",
+        req = urllib2.Request(self.service_url + "/offer",
                               json.dumps(info),
                               {'Content-Type': 'application/json'})
         tasks_to_run = json.loads(urllib2.urlopen(req).read())
       except:
-        logging.exception("Error POSTing offer to service at %s" % self.service)
+        logging.exception("Error POSTing offer to service at %s" % self.service_url)
         return
 
       tasks = []
@@ -197,12 +195,12 @@ class HTTPProxyScheduler(mesos.Scheduler):
       #   "Task %s finished" % update.task_id.value)
 
     try:
-      req = urllib2.Request(self.service + "status",
+      req = urllib2.Request(self.service_url + "/status",
                             json.dumps(status_update),
                             {'Content-Type': 'application/json'})
       resp = urllib2.urlopen(req).read()
     except:
-      logging.exception("Error POSTing status update to service at %s" % self.service)
+      logging.exception("Error POSTing status update to service at %s" % self.service_url)
       return
 
 
@@ -238,9 +236,7 @@ class HTTPProxyScheduler(mesos.Scheduler):
     logging.error("Error from Mesos: %s" % message)
 
 
-def main(service_url, mesos_master, log_level):
-  logging.basicConfig(level=getattr(logging, log_level.upper()))
-
+def main(service_url, mesos_master):
   executor = mesos_pb2.ExecutorInfo()
   executor.executor_id.value = "default"
   executor.command.value = os.path.abspath("./executor.py")
@@ -265,32 +261,13 @@ def main(service_url, mesos_master, log_level):
   sys.exit(status)
 
 
-
 if __name__ == "__main__":
-  # kill_child is a total hack because using the mesos driver seems to
-  # prevent the process from being interrupted. instead, we run the
-  # driver in a child and send a term signal on exit
-  child_pid = None
-  def kill_child():
-    if child_pid is None:
-      pass
-    else:
-      os.kill(child_pid, signal.SIGTERM)
-  atexit.register(kill_child)
+  parser = argparse.ArgumentParser(description='Mesos HTTP Proxy')
 
-  if '--child' not in sys.argv:
-    p = subprocess.Popen(sys.argv + ['--child'])
-    child_pid = p.pid
-    p.wait()
-  else:
-    sys.argv.remove('--child')
+  parser.add_argument('--service-url', required=True, help='URL root of your service, including scheme. (e.g. http://localhost:5000/)')
+  parser.add_argument('--mesos-master', default='127.0.1.1:5050', help='Location of Mesos master server. (e.g. 127.0.1.1:5050)')
+  parser.add_argument('--log-level', default='info', help="Level to log at. (e.g. info)")
 
-    parser = argparse.ArgumentParser(description='Mesos HTTP Proxy')
-
-    parser.add_argument('--service-url', required=True, help='URL root of your service, including scheme. (e.g. http://localhost:5000/)')
-    parser.add_argument('--mesos-master', default='127.0.1.1:5050', help='Location of Mesos master server. (e.g. 127.0.1.1:5050)')
-    parser.add_argument('--log-level', default='info', help="Level to log at. (e.g. info)")
-
-    args = parser.parse_args(sys.argv[1:])
-
-    main(args.service_url, args.mesos_master, args.log_level)
+  args = parser.parse_args(sys.argv[1:])
+  logging.basicConfig(level=getattr(logging, args.log_level.upper()))
+  main(args.service_url.rstrip('/'), args.mesos_master)
